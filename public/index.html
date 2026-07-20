@@ -20,11 +20,8 @@
       -webkit-tap-highlight-color: transparent;
       user-select: none;
     }
-
-    /* ── Layout ─────────────────────────── */
     .app { display:flex; flex-direction:column; height:100dvh; position:relative; }
 
-    /* ── Top bar ────────────────────────── */
     .topbar {
       position:absolute; inset:0 0 auto 0; z-index:20;
       display:flex; align-items:center; justify-content:space-between;
@@ -57,7 +54,6 @@
     .badge-dot.error      { background:#ef4444; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.45;transform:scale(.7)} }
 
-    /* ── Orb ────────────────────────────── */
     .orb-wrap {
       flex:1; display:grid; place-items:center; position:relative; overflow:hidden;
     }
@@ -68,7 +64,6 @@
     canvas#orb.listening  { width:310px; height:310px; }
     canvas#orb.speaking   { width:340px; height:340px; filter:drop-shadow(0 0 40px rgba(168,139,250,.25)); }
 
-    /* ── Transcript ─────────────────────── */
     .transcript-wrap {
       position:absolute; bottom:110px; left:50%; transform:translateX(-50%);
       width:92%; max-width:560px; text-align:center; pointer-events:none; z-index:10;
@@ -84,7 +79,6 @@
     .transcript .u { color:#93c5fd; }
     .transcript .a { color:#c4b5fd; }
 
-    /* ── Bottom controls ────────────────── */
     .controls {
       position:absolute; inset:auto 0 0 0; z-index:20;
       padding:14px 16px max(14px, env(safe-area-inset-bottom));
@@ -132,7 +126,6 @@
     .close-btn:hover { transform:scale(1.06); }
     .close-btn:active { transform:scale(.94); }
 
-    /* ── Settings modal ─────────────────── */
     .modal-bg {
       position:fixed; inset:0; z-index:100;
       background:rgba(0,0,0,.65); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
@@ -170,14 +163,12 @@
     }
     .modal-close:hover { background:rgba(255,255,255,.18); }
 
-    /* ── Status toast ───────────────────── */
     .toast {
       position:absolute; top:62px; left:50%; transform:translateX(-50%);
       z-index:30; font-size:12px; color:rgba(255,255,255,.5);
       pointer-events:none; white-space:nowrap;
     }
 
-    /* ── Responsive ─────────────────────── */
     @media(max-width:420px){
       canvas#orb { width:210px; height:210px; }
       canvas#orb.listening { width:240px; height:240px; }
@@ -187,8 +178,6 @@
 </head>
 <body>
 <div class="app">
-
-  <!-- Top bar -->
   <div class="topbar">
     <div class="topbar-left">
       <button class="icon-btn" id="menuBtn" aria-label="Menu">
@@ -203,17 +192,14 @@
 
   <div class="toast" id="toast"></div>
 
-  <!-- Orb -->
   <div class="orb-wrap">
     <canvas id="orb" width="640" height="640"></canvas>
   </div>
 
-  <!-- Transcript -->
   <div class="transcript-wrap">
     <div class="transcript" id="transcript"></div>
   </div>
 
-  <!-- Bottom controls -->
   <div class="controls">
     <div class="input-row">
       <div class="field">
@@ -228,7 +214,6 @@
     </div>
   </div>
 
-  <!-- Settings -->
   <div class="modal-bg" id="modalBg">
     <div class="modal">
       <h2>Configurações</h2>
@@ -247,18 +232,18 @@
    STATE
    ================================================================ */
 const S = {
-  phase: 'idle',          // idle | listening | thinking | speaking | error
-  voice: '',              // Fish Audio reference_id
+  phase: 'idle',
+  voice: '',
   model: 's2.1-pro-free',
   latency: 'balanced',
   speed: 1.0,
   lang: 'pt-BR',
-  history: [],            // conversation messages
-  ttsWs: null,            // WebSocket to our proxy
-  audioQueue: [],         // base64 PCM chunks
-  playing: false,         // is audio playing?
+  history: [],
+  audioQueue: [],
+  playing: false,
   recognition: null,
-  stopFlag: false,        // interrupt flag
+  abortController: null,
+  currentAudio: null,
 };
 
 /* ================================================================
@@ -297,17 +282,14 @@ const particles = Array.from({length:40}, () => ({
 function drawOrb() {
   const W=640, H=640, cx=W/2, cy=H/2, R=130;
   ctx.clearRect(0,0,W,H);
-
   amp += (targetAmp - amp) * .07;
 
-  // Outer glow
   const g1 = ctx.createRadialGradient(cx,cy,R*.2,cx,cy,R*2);
   g1.addColorStop(0, `hsla(${hue},55%,72%,.12)`);
   g1.addColorStop(1, 'transparent');
   ctx.fillStyle = g1;
   ctx.fillRect(0,0,W,H);
 
-  // Blob path
   ctx.beginPath();
   for (let i=0; i<=128; i++) {
     const a = (i/128)*Math.PI*2;
@@ -325,14 +307,12 @@ function drawOrb() {
   ctx.fillStyle = g2;
   ctx.fill();
 
-  // Inner highlight
   const g3 = ctx.createRadialGradient(cx-18,cy-18,4,cx,cy,R*.55);
   g3.addColorStop(0,'rgba(255,255,255,.55)');
   g3.addColorStop(1,'rgba(255,255,255,0)');
   ctx.fillStyle = g3;
   ctx.fill();
 
-  // Cloud wisps
   ctx.save();
   ctx.globalAlpha = .25 + amp*.25;
   for (let i=0;i<6;i++){
@@ -346,7 +326,6 @@ function drawOrb() {
   }
   ctx.restore();
 
-  // Particles
   for (const p of particles) {
     p.x += p.vx + Math.sin(t+p.y*.008)*.25;
     p.y += p.vy + Math.cos(t+p.x*.008)*.25;
@@ -360,21 +339,14 @@ function drawOrb() {
     }
   }
   ctx.globalAlpha=1;
-
   t += .018;
 
-  // Hue/amp by phase
   switch(S.phase){
-    case 'speaking':
-      targetAmp=.95; hue=265+Math.sin(t*2.5)*18; break;
-    case 'listening':
-      targetAmp=.55; hue=215+Math.sin(t*1.6)*12; break;
-    case 'thinking':
-      targetAmp=.35; hue=280+Math.sin(t*1.8)*15; break;
-    default:
-      targetAmp=.12; hue=240+Math.sin(t*.4)*8;
+    case 'speaking': targetAmp=.95; hue=265+Math.sin(t*2.5)*18; break;
+    case 'listening': targetAmp=.55; hue=215+Math.sin(t*1.6)*12; break;
+    case 'thinking': targetAmp=.35; hue=280+Math.sin(t*1.8)*15; break;
+    default: targetAmp=.12; hue=240+Math.sin(t*.4)*8;
   }
-
   requestAnimationFrame(drawOrb);
 }
 drawOrb();
@@ -407,8 +379,8 @@ function showTranscript(html){ transcript.innerHTML=html; }
       o.textContent=v.title||v.name||v._id;
       selVoice.appendChild(o);
     });
-    if(items.length)toastMsg(`${items.length} vozes carregadas`,2500);
-    else toastMsg('Nenhuma voz — verifique sua API Key',5000);
+    if(items.length) toastMsg(`${items.length} vozes`,2500);
+    else toastMsg('Nenhuma voz — verifique API Key',5000);
   }catch(e){
     selVoice.innerHTML='<option value="">Erro ao carregar</option>';
     toastMsg('Erro ao carregar vozes',5000);
@@ -435,20 +407,14 @@ const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecogni
 function startListening(){
   if(!SpeechRecognition){ toastMsg('Recurso não suportado neste navegador',4000); return; }
   if(S.recognition) S.recognition.abort();
-
   const rec = new SpeechRecognition();
   rec.lang = S.lang;
   rec.interimResults = true;
   rec.continuous = true;
   rec.maxAlternatives = 1;
-
   let final = '', silenceTimer = null;
 
-  rec.onstart = ()=>{
-    setPhase('listening');
-    micBtn.classList.add('recording');
-  };
-
+  rec.onstart = ()=>{ setPhase('listening'); micBtn.classList.add('recording'); };
   rec.onresult = ev => {
     let interim = '';
     for(let i=ev.resultIndex; i<ev.results.length; i++){
@@ -465,18 +431,12 @@ function startListening(){
       }, 900);
     }
   };
-
   rec.onerror = ev => {
     if(ev.error==='no-speech') toastMsg('Nenhuma fala detectada');
     else if(ev.error!=='aborted') toastMsg(`Erro: ${ev.error}`);
     stopListening();
   };
-
-  rec.onend = ()=>{
-    stopListening();
-    if(final.trim()){ sendMessage(final.trim()); final=''; }
-  };
-
+  rec.onend = ()=>{ stopListening(); if(final.trim()){ sendMessage(final.trim()); final=''; } };
   S.recognition = rec;
   rec.start();
 }
@@ -488,207 +448,160 @@ function stopListening(){
 }
 
 /* ================================================================
-   TTS WEBSOCKET
-   ================================================================ */
-async function ensureTTS(){
-  if(S.ttsWs && S.ttsWs.readyState===WebSocket.OPEN) return S.ttsWs;
-
-  return new Promise((resolve,reject)=>{
-    const proto = location.protocol==='https:'?'wss:':'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/api/tts-stream`);
-
-    ws.onopen = ()=>{
-      ws.send(JSON.stringify({
-        type:'start',
-        config:{
-          model:S.model,
-          reference_id:S.voice||undefined,
-          latency:S.latency,
-          speed:S.speed,
-          format:'mp3',
-        }
-      }));
-    };
-
-    ws.onmessage = ev => {
-      const m = JSON.parse(ev.data);
-      if(m.type==='ready'){
-        S.ttsWs = ws;
-        resolve(ws);
-      } else if(m.type==='audio'){
-        queueAudio(m.data);
-      } else if(m.type==='done'){
-        // segment done
-      } else if(m.type==='error'){
-        toastMsg(`TTS: ${m.message}`,4000);
-      } else if(m.type==='stream_closed'){
-        S.ttsWs = null;
-      }
-    };
-
-    ws.onerror = ()=>reject(new Error('WebSocket error'));
-    ws.onclose = ()=>{ S.ttsWs=null; };
-  });
-}
-
-/* ================================================================
-   AUDIO PLAYBACK (PCM → AudioBuffer → Web Audio API)
+   AUDIO PLAYBACK — HTTP streaming TTS
+   Each sentence is fetched as MP3, decoded, and queued for playback.
    ================================================================ */
 let audioCtx = null;
-let nextPlayTime = 0;
 
-function getAC(){
-  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+function ensureAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
   return audioCtx;
 }
 
-function queueAudio(b64){
-  S.audioQueue.push(b64);
-  if(!S.playing) drainQueue();
-}
+async function speakText(text) {
+  if (!text || !text.trim()) return;
 
-async function drainQueue(){
-  if(S.audioQueue.length===0){
-    S.playing=false;
-    setPhase(S.history.length?'idle':'idle');
-    return;
-  }
-  S.playing=true;
   setPhase('speaking');
+  S.playing = true;
 
-  const b64 = S.audioQueue.shift();
-  try{
-    const ac = getAC();
-    if(ac.state==='suspended') await ac.resume();
+  try {
+    const resp = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: text.trim(),
+        model: S.model,
+        reference_id: S.voice || undefined,
+        latency: S.latency,
+        speed: S.speed,
+      }),
+    });
 
-    // Decode MP3 → PCM
-    const raw = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
-    const buf = await ac.decodeAudioData(raw.buffer);
-    const src = ac.createBufferSource();
-    src.buffer = buf;
-    src.connect(ac.destination);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('TTS fetch error:', resp.status, err);
+      toastMsg(`TTS erro: ${resp.status}`, 3000);
+      setPhase('idle');
+      S.playing = false;
+      return;
+    }
 
-    const now = ac.currentTime;
-    const startAt = Math.max(nextPlayTime, now);
-    src.start(startAt);
-    nextPlayTime = startAt + buf.duration;
+    // Get the full MP3 buffer
+    const arrayBuf = await resp.arrayBuffer();
+    const ac = ensureAudioCtx();
 
-    src.onended = ()=> drainQueue();
-  }catch(e){
-    console.warn('Audio decode/play error', e);
-    drainQueue();
+    // Decode MP3 → AudioBuffer
+    const audioBuf = await ac.decodeAudioData(arrayBuf);
+    const source = ac.createBufferSource();
+    source.buffer = audioBuf;
+    source.connect(ac.destination);
+
+    S.currentAudio = source;
+
+    return new Promise((resolve) => {
+      source.onended = () => {
+        S.currentAudio = null;
+        S.playing = false;
+        setPhase('idle');
+        resolve();
+      };
+      source.start();
+    });
+  } catch (e) {
+    console.error('speakText error:', e);
+    toastMsg('Erro ao gerar áudio', 3000);
+    setPhase('idle');
+    S.playing = false;
   }
 }
 
-function stopAudio(){
-  S.audioQueue=[];
-  S.playing=false;
-  nextPlayTime=0;
-  if(audioCtx){ audioCtx.close().catch(()=>{}); audioCtx=null; }
-  if(S.phase==='speaking') setPhase('idle');
-}
-
-/* ================================================================
-   TEXT CHUNKING → TTS
-   Break AI stream into natural sentence fragments for low-latency TTS.
-   ================================================================ */
-let ttsBuffer = '';
-const SENTENCE_RE = /[.!?,;:]\s/;
-
-function feedTTS(text){
-  ttsBuffer += text;
-  // Send sentence-level chunks for best quality + low latency
-  let idx;
-  while((idx = ttsBuffer.search(SENTENCE_RE)) !== -1){
-    const splitAt = idx + 1; // include punctuation
-    const chunk = ttsBuffer.slice(0, splitAt);
-    ttsBuffer = ttsBuffer.slice(splitAt);
-    sendTTSChunk(chunk);
+/* Split text into sentences for streaming TTS */
+function splitIntoSentences(text) {
+  const sentences = [];
+  const regex = /[^.!?]+[.!?]+/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    sentences.push(match[0].trim());
   }
-}
-
-function flushTTS(){
-  if(ttsBuffer.trim()){
-    sendTTSChunk(ttsBuffer);
-    ttsBuffer = '';
+  // Add remaining text without punctuation
+  const lastIdx = text.lastIndexOf(sentences[sentences.length - 1] || '');
+  const remaining = (sentences[sentences.length - 1] || '');
+  const endIdx = lastIdx + remaining.length;
+  if (endIdx < text.length) {
+    const tail = text.slice(endIdx).trim();
+    if (tail) sentences.push(tail);
   }
-  // Flush Fish Audio buffer
-  if(S.ttsWs?.readyState===WebSocket.OPEN){
-    S.ttsWs.send(JSON.stringify({type:'flush'}));
-  }
-}
-
-function sendTTSChunk(text){
-  if(S.ttsWs?.readyState===WebSocket.OPEN){
-    S.ttsWs.send(JSON.stringify({type:'text', text}));
-  }
+  if (sentences.length === 0 && text.trim()) sentences.push(text.trim());
+  return sentences;
 }
 
 /* ================================================================
    SEND MESSAGE
    ================================================================ */
-async function sendMessage(text){
-  if(!text.trim()) return;
-  S.history.push({role:'user', content:text});
+async function sendMessage(text) {
+  if (!text.trim()) return;
+  S.history.push({ role: 'user', content: text });
   showTranscript(`<span class="u">${escHtml(text)}</span>`);
   input.value = '';
 
   // Stop any ongoing audio
-  if(S.playing) stopAudio();
-  if(S.ttsWs?.readyState===WebSocket.OPEN){
-    S.ttsWs.send(JSON.stringify({type:'stop'}));
+  if (S.currentAudio) {
+    try { S.currentAudio.stop(); } catch {}
+    S.currentAudio = null;
   }
-  ttsBuffer='';
+  if (S.abortController) S.abortController.abort();
+  S.abortController = new AbortController();
+  S.playing = false;
 
   setPhase('thinking');
 
-  // Ensure TTS connection
-  try{ await ensureTTS(); }catch(e){
-    toastMsg('Erro ao conectar com Fish Audio',4000);
-    setPhase('error');
-    return;
-  }
-
-  try{
-    const resp = await fetch('/api/chat',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({messages:S.history}),
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: S.history }),
+      signal: S.abortController.signal,
     });
 
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
-    let aiText='', buf='';
+    let aiText = '', buf = '';
 
-    while(true){
-      const {done,value} = await reader.read();
-      if(done) break;
-      buf += dec.decode(value,{stream:true});
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
       const lines = buf.split('\n');
-      buf = lines.pop()||'';
+      buf = lines.pop() || '';
 
-      for(const line of lines){
-        if(!line.startsWith('data: ')) continue;
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
         const d = line.slice(6);
-        if(d==='[DONE]') break;
-        try{
-          const j=JSON.parse(d);
+        if (d === '[DONE]') break;
+        try {
+          const j = JSON.parse(d);
           const delta = j.choices?.[0]?.delta?.content;
-          if(delta){
+          if (delta) {
             aiText += delta;
             showTranscript(`<span class="a">${escHtml(aiText)}</span>`);
-            feedTTS(delta);
           }
-        }catch{}
+        } catch {}
       }
     }
 
-    // Flush remaining text
-    flushTTS();
-    S.history.push({role:'assistant', content:aiText});
-  }catch(e){
-    console.error('Chat error:',e);
-    toastMsg('Erro ao obter resposta',3000);
+    S.history.push({ role: 'assistant', content: aiText });
+
+    // Now speak the full response
+    if (aiText.trim()) {
+      await speakText(aiText);
+    } else {
+      setPhase('idle');
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    console.error('Chat error:', e);
+    toastMsg('Erro ao obter resposta', 3000);
     setPhase('error');
   }
 }
@@ -696,41 +609,35 @@ async function sendMessage(text){
 /* ================================================================
    EVENT LISTENERS
    ================================================================ */
-micBtn.onclick = ()=>{
-  if(S.phase==='listening') stopListening();
+micBtn.onclick = () => {
+  ensureAudioCtx(); // Must be triggered by user gesture
+  if (S.phase === 'listening') stopListening();
   else startListening();
 };
 
-input.addEventListener('keydown', e=>{
-  if(e.key==='Enter'&&!e.shiftKey){
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    ensureAudioCtx();
     sendMessage(input.value);
   }
 });
 
-closeBtn.onclick = ()=>{
+closeBtn.onclick = () => {
   stopListening();
-  stopAudio();
-  if(S.ttsWs){
-    try{S.ttsWs.send(JSON.stringify({type:'stop'}));}catch{}
-    S.ttsWs.close();
-    S.ttsWs=null;
-  }
-  ttsBuffer='';
-  S.history=[];
+  if (S.currentAudio) { try { S.currentAudio.stop(); } catch {} S.currentAudio = null; }
+  if (S.abortController) S.abortController.abort();
+  S.playing = false;
+  S.history = [];
   showTranscript('');
   setPhase('idle');
-  toastMsg('Conversa reiniciada',2000);
+  toastMsg('Conversa reiniciada', 2000);
 };
 
-menuBtn.onclick = ()=> toastMsg('🐟 Fish Studio Voice Chat v1.0',2500);
+menuBtn.onclick = () => toastMsg('Fish Studio Voice Chat v1.0', 2500);
 
-/* ================================================================
-   HELPERS
-   ================================================================ */
-function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// Init
 setPhase('idle');
 </script>
 </body>
