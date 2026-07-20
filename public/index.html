@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Voice Chat Live — Fish Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    :root {
+      --bg: #000; --surface: rgba(255,255,255,.08);
+      --text: #fff; --muted: rgba(255,255,255,.35);
+      --orb-hue: 240; --radius: 9999px;
+    }
+    html, body { height:100%; overflow:hidden; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    /* ── Layout ─────────────────────────── */
+    .app { display:flex; flex-direction:column; height:100dvh; position:relative; }
+
+    /* ── Top bar ────────────────────────── */
+    .topbar {
+      position:absolute; inset:0 0 auto 0; z-index:20;
+      display:flex; align-items:center; justify-content:space-between;
+      padding:14px 18px;
+    }
+    .topbar-left { display:flex; align-items:center; gap:10px; }
+    .icon-btn {
+      width:42px; height:42px; border-radius:50%; border:none;
+      background:var(--surface); color:var(--text);
+      display:grid; place-items:center; cursor:pointer;
+      transition:background .15s; -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+    }
+    .icon-btn:hover { background:rgba(255,255,255,.16); }
+    .icon-btn:active { transform:scale(.95); }
+
+    .badge {
+      display:inline-flex; align-items:center; gap:7px;
+      padding:7px 16px; border-radius:var(--radius);
+      background:var(--surface); -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+      font-size:14px; font-weight:500; letter-spacing:.2px;
+    }
+    .badge-dot {
+      width:8px; height:8px; border-radius:50%;
+      background:#6b7280; transition:background .3s;
+    }
+    .badge-dot.idle      { background:#6b7280; }
+    .badge-dot.listening  { background:#f59e0b; animation:pulse 1.2s infinite; }
+    .badge-dot.thinking   { background:#a78bfa; animation:pulse 1s infinite; }
+    .badge-dot.speaking   { background:#4ade80; animation:pulse 1.6s infinite; }
+    .badge-dot.error      { background:#ef4444; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.45;transform:scale(.7)} }
+
+    /* ── Orb ────────────────────────────── */
+    .orb-wrap {
+      flex:1; display:grid; place-items:center; position:relative; overflow:hidden;
+    }
+    canvas#orb {
+      width:280px; height:280px; border-radius:50%;
+      transition: width .35s ease, height .35s ease, filter .35s ease;
+    }
+    canvas#orb.listening  { width:310px; height:310px; }
+    canvas#orb.speaking   { width:340px; height:340px; filter:drop-shadow(0 0 40px rgba(168,139,250,.25)); }
+
+    /* ── Transcript ─────────────────────── */
+    .transcript-wrap {
+      position:absolute; bottom:110px; left:50%; transform:translateX(-50%);
+      width:92%; max-width:560px; text-align:center; pointer-events:none; z-index:10;
+    }
+    .transcript {
+      display:inline-block; font-size:15px; line-height:1.55;
+      color:rgba(255,255,255,.88); max-height:130px; overflow-y:auto;
+      padding:10px 18px; border-radius:14px;
+      background:rgba(0,0,0,.45); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+      transition:opacity .25s;
+    }
+    .transcript:empty { opacity:0; }
+    .transcript .u { color:#93c5fd; }
+    .transcript .a { color:#c4b5fd; }
+
+    /* ── Bottom controls ────────────────── */
+    .controls {
+      position:absolute; inset:auto 0 0 0; z-index:20;
+      padding:14px 16px max(14px, env(safe-area-inset-bottom));
+    }
+    .input-row {
+      display:flex; align-items:center; gap:12px;
+      max-width:580px; margin:0 auto;
+    }
+    .field {
+      flex:1; display:flex; align-items:center; gap:4px;
+      background:var(--surface); border-radius:var(--radius);
+      padding:4px 6px 4px 14px;
+      border:1px solid rgba(255,255,255,.06);
+      transition:border-color .2s;
+    }
+    .field:focus-within { border-color:rgba(255,255,255,.2); }
+    .field input {
+      flex:1; background:none; border:none; outline:none;
+      color:var(--text); font:inherit; font-size:15px; padding:10px 6px;
+    }
+    .field input::placeholder { color:var(--muted); }
+
+    .mic-btn {
+      width:50px; height:50px; border-radius:50%; border:none;
+      background:var(--surface); color:var(--text);
+      display:grid; place-items:center; cursor:pointer;
+      transition:all .25s; position:relative; flex-shrink:0;
+    }
+    .mic-btn:hover { background:rgba(255,255,255,.16); }
+    .mic-btn.recording {
+      background:#dc2626;
+      animation:micGlow 1.4s infinite;
+    }
+    @keyframes micGlow {
+      0%,100%{ box-shadow:0 0 0 0 rgba(220,38,38,.45) }
+      50%{ box-shadow:0 0 0 14px rgba(220,38,38,0) }
+    }
+
+    .close-btn {
+      width:50px; height:50px; border-radius:50%; border:none;
+      background:#fff; color:#000;
+      display:grid; place-items:center; cursor:pointer;
+      transition:transform .15s; flex-shrink:0;
+    }
+    .close-btn:hover { transform:scale(1.06); }
+    .close-btn:active { transform:scale(.94); }
+
+    /* ── Settings modal ─────────────────── */
+    .modal-bg {
+      position:fixed; inset:0; z-index:100;
+      background:rgba(0,0,0,.65); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+      display:none; place-items:center;
+    }
+    .modal-bg.open { display:grid; }
+    .modal {
+      background:#18181b; border-radius:22px; padding:28px 26px;
+      width:92%; max-width:400px; max-height:82dvh; overflow-y:auto;
+      border:1px solid rgba(255,255,255,.08);
+    }
+    .modal h2 { font-size:18px; font-weight:600; margin-bottom:20px; }
+    .field-group { margin-bottom:16px; }
+    .field-group label {
+      display:block; font-size:11px; font-weight:600;
+      color:rgba(255,255,255,.4); text-transform:uppercase;
+      letter-spacing:.6px; margin-bottom:5px;
+    }
+    .field-group select, .field-group input[type=text] {
+      width:100%; padding:10px 14px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05);
+      color:#fff; font:inherit; font-size:14px; outline:none;
+      -webkit-appearance:none; appearance:none;
+    }
+    .field-group select {
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='%23999'%3E%3Cpath d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+      background-repeat:no-repeat; background-position:right 12px center;
+      padding-right:30px;
+    }
+    .field-group select option { background:#18181b; color:#fff; }
+    .modal-close {
+      width:100%; margin-top:6px; padding:12px; border:none; border-radius:12px;
+      background:rgba(255,255,255,.1); color:#fff; font:inherit; font-size:15px;
+      font-weight:500; cursor:pointer; transition:background .15s;
+    }
+    .modal-close:hover { background:rgba(255,255,255,.18); }
+
+    /* ── Status toast ───────────────────── */
+    .toast {
+      position:absolute; top:62px; left:50%; transform:translateX(-50%);
+      z-index:30; font-size:12px; color:rgba(255,255,255,.5);
+      pointer-events:none; white-space:nowrap;
+    }
+
+    /* ── Responsive ─────────────────────── */
+    @media(max-width:420px){
+      canvas#orb { width:210px; height:210px; }
+      canvas#orb.listening { width:240px; height:240px; }
+      canvas#orb.speaking  { width:260px; height:260px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn" id="menuBtn" aria-label="Menu">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="badge"><div class="badge-dot idle" id="dot"></div><span id="label">Live</span></div>
+    </div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06A1.65 1.65 0 0015 19.4a1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    </button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Orb -->
+  <div class="orb-wrap">
+    <canvas id="orb" width="640" height="640"></canvas>
+  </div>
+
+  <!-- Transcript -->
+  <div class="transcript-wrap">
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <!-- Bottom controls -->
+  <div class="controls">
+    <div class="input-row">
+      <div class="field">
+        <input type="text" id="input" placeholder="Pergunte ao Voice Chat..." autocomplete="off" enterkeyhint="send">
+      </div>
+      <button class="mic-btn" id="micBtn" aria-label="Microfone">
+        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+      </button>
+      <button class="close-btn" id="closeBtn" aria-label="Fechar">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="modal-bg" id="modalBg">
+    <div class="modal">
+      <h2>Configurações</h2>
+      <div class="field-group"><label>Voz (Fish Studio)</label><select id="selVoice"><option value="">Carregando...</option></select></div>
+      <div class="field-group"><label>Velocidade</label><select id="selSpeed"><option value="0.8">Lenta</option><option value="1.0" selected>Normal</option><option value="1.2">Rápida</option><option value="1.5">Muito Rápida</option></select></div>
+      <div class="field-group"><label>Modelo TTS</label><select id="selModel"><option value="s2.1-pro-free">s2.1-pro-free (Grátis)</option><option value="s2.1-pro">s2.1-pro (Recomendado)</option><option value="s2-pro">s2-pro</option><option value="s1">s1</option></select></div>
+      <div class="field-group"><label>Latência</label><select id="selLatency"><option value="balanced" selected>Balanced (Rápido)</option><option value="normal">Normal (Qualidade)</option></select></div>
+      <div class="field-group"><label>Idioma (STT)</label><select id="selLang"><option value="pt-BR">Português (BR)</option><option value="en-US">English</option><option value="es-ES">Español</option><option value="fr-FR">Français</option><option value="de-DE">Deutsch</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></div>
+      <button class="modal-close" id="modalClose">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   STATE
+   ================================================================ */
+const S = {
+  phase: 'idle',          // idle | listening | thinking | speaking | error
+  voice: '',              // Fish Audio reference_id
+  model: 's2.1-pro-free',
+  latency: 'balanced',
+  speed: 1.0,
+  lang: 'pt-BR',
+  history: [],            // conversation messages
+  ttsWs: null,            // WebSocket to our proxy
+  audioQueue: [],         // base64 PCM chunks
+  playing: false,         // is audio playing?
+  recognition: null,
+  stopFlag: false,        // interrupt flag
+};
+
+/* ================================================================
+   DOM
+   ================================================================ */
+const $ = s => document.querySelector(s);
+const canvas = $('#orb');
+const ctx = canvas.getContext('2d');
+const input = $('#input');
+const micBtn = $('#micBtn');
+const closeBtn = $('#closeBtn');
+const settingsBtn = $('#settingsBtn');
+const menuBtn = $('#menuBtn');
+const modalBg = $('#modalBg');
+const modalClose = $('#modalClose');
+const selVoice = $('#selVoice');
+const selSpeed = $('#selSpeed');
+const selModel = $('#selModel');
+const selLatency = $('#selLatency');
+const selLang = $('#selLang');
+const dot = $('#dot');
+const label = $('#label');
+const transcript = $('#transcript');
+const toast = $('#toast');
+
+/* ================================================================
+   ORB ANIMATION
+   ================================================================ */
+let t = 0, amp = 0, targetAmp = 0.12, hue = 240;
+const particles = Array.from({length:40}, () => ({
+  x: Math.random()*640, y: Math.random()*640,
+  vx: (Math.random()-.5)*.4, vy: (Math.random()-.5)*.4,
+  r: Math.random()*2.5+.8, a: Math.random()*.4+.1,
+}));
+
+function drawOrb() {
+  const W=640, H=640, cx=W/2, cy=H/2, R=130;
+  ctx.clearRect(0,0,W,H);
+
+  amp += (targetAmp - amp) * .07;
+
+  // Outer glow
+  const g1 = ctx.createRadialGradient(cx,cy,R*.2,cx,cy,R*2);
+  g1.addColorStop(0, `hsla(${hue},55%,72%,.12)`);
+  g1.addColorStop(1, 'transparent');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0,0,W,H);
+
+  // Blob path
+  ctx.beginPath();
+  for (let i=0; i<=128; i++) {
+    const a = (i/128)*Math.PI*2;
+    const n = Math.sin(a*3+t*.8)*10*amp + Math.cos(a*5+t*1.2)*6*amp + Math.sin(a*7+t*.5)*4*amp;
+    const r = R + n;
+    const px = cx + Math.cos(a)*r, py = cy + Math.sin(a)*r;
+    i===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+  }
+  ctx.closePath();
+
+  const g2 = ctx.createRadialGradient(cx-30,cy-30,10,cx,cy,R+30);
+  g2.addColorStop(0, `hsla(${hue+20},65%,88%,.96)`);
+  g2.addColorStop(.5, `hsla(${hue},55%,78%,.92)`);
+  g2.addColorStop(1, `hsla(${hue-15},48%,68%,.88)`);
+  ctx.fillStyle = g2;
+  ctx.fill();
+
+  // Inner highlight
+  const g3 = ctx.createRadialGradient(cx-18,cy-18,4,cx,cy,R*.55);
+  g3.addColorStop(0,'rgba(255,255,255,.55)');
+  g3.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle = g3;
+  ctx.fill();
+
+  // Cloud wisps
+  ctx.save();
+  ctx.globalAlpha = .25 + amp*.25;
+  for (let i=0;i<6;i++){
+    const wx=cx+Math.sin(t*.3+i*1.3)*45, wy=cy+Math.cos(t*.35+i*1.1)*35;
+    const wr=28+Math.sin(t*.45+i)*12;
+    const wg=ctx.createRadialGradient(wx,wy,0,wx,wy,wr);
+    wg.addColorStop(0,'rgba(255,255,255,.45)');
+    wg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=wg;
+    ctx.beginPath(); ctx.arc(wx,wy,wr,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+
+  // Particles
+  for (const p of particles) {
+    p.x += p.vx + Math.sin(t+p.y*.008)*.25;
+    p.y += p.vy + Math.cos(t+p.x*.008)*.25;
+    if(p.x<-10)p.x=650; if(p.x>650)p.x=-10;
+    if(p.y<-10)p.y=650; if(p.y>650)p.y=-10;
+    const d=Math.hypot(p.x-160,p.y-160);
+    if(d<R*.88){
+      ctx.globalAlpha=p.a*amp*2.5;
+      ctx.fillStyle='#fff';
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha=1;
+
+  t += .018;
+
+  // Hue/amp by phase
+  switch(S.phase){
+    case 'speaking':
+      targetAmp=.95; hue=265+Math.sin(t*2.5)*18; break;
+    case 'listening':
+      targetAmp=.55; hue=215+Math.sin(t*1.6)*12; break;
+    case 'thinking':
+      targetAmp=.35; hue=280+Math.sin(t*1.8)*15; break;
+    default:
+      targetAmp=.12; hue=240+Math.sin(t*.4)*8;
+  }
+
+  requestAnimationFrame(drawOrb);
+}
+drawOrb();
+
+/* ================================================================
+   PHASE / UI HELPERS
+   ================================================================ */
+function setPhase(p) {
+  S.phase = p;
+  canvas.className = p==='speaking'?'speaking':p==='listening'?'listening':'';
+  dot.className = 'badge-dot ' + (p==='idle'?'idle':p);
+  const labels = {idle:'Live',listening:'Ouvindo...',thinking:'Pensando...',speaking:'Falando...',error:'Erro'};
+  label.textContent = labels[p]||'Live';
+}
+function toastMsg(m,d=3000){ toast.textContent=m; if(d>0)setTimeout(()=>toast.textContent='',d); }
+function showTranscript(html){ transcript.innerHTML=html; }
+
+/* ================================================================
+   VOICE LOADING
+   ================================================================ */
+(async function loadVoices(){
+  try{
+    const r=await fetch('/api/voices');
+    const d=await r.json();
+    const items=d.items||d.data||[];
+    selVoice.innerHTML='<option value="">Voz Padrão do Sistema</option>';
+    items.forEach(v=>{
+      const o=document.createElement('option');
+      o.value=v._id||v.id;
+      o.textContent=v.title||v.name||v._id;
+      selVoice.appendChild(o);
+    });
+    if(items.length)toastMsg(`${items.length} vozes carregadas`,2500);
+    else toastMsg('Nenhuma voz — verifique sua API Key',5000);
+  }catch(e){
+    selVoice.innerHTML='<option value="">Erro ao carregar</option>';
+    toastMsg('Erro ao carregar vozes',5000);
+  }
+})();
+
+/* ================================================================
+   SETTINGS
+   ================================================================ */
+settingsBtn.onclick=()=>modalBg.classList.add('open');
+modalClose.onclick=()=>modalBg.classList.remove('open');
+modalBg.onclick=e=>{if(e.target===modalBg)modalBg.classList.remove('open');};
+selVoice.onchange=e=>{S.voice=e.target.value;};
+selSpeed.onchange=e=>{S.speed=parseFloat(e.target.value);};
+selModel.onchange=e=>{S.model=e.target.value;};
+selLatency.onchange=e=>{S.latency=e.target.value;};
+selLang.onchange=e=>{S.lang=e.target.value;};
+
+/* ================================================================
+   SPEECH RECOGNITION (STT)
+   ================================================================ */
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function startListening(){
+  if(!SpeechRecognition){ toastMsg('Recurso não suportado neste navegador',4000); return; }
+  if(S.recognition) S.recognition.abort();
+
+  const rec = new SpeechRecognition();
+  rec.lang = S.lang;
+  rec.interimResults = true;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
+
+  let final = '', silenceTimer = null;
+
+  rec.onstart = ()=>{
+    setPhase('listening');
+    micBtn.classList.add('recording');
+  };
+
+  rec.onresult = ev => {
+    let interim = '';
+    for(let i=ev.resultIndex; i<ev.results.length; i++){
+      const t = ev.results[i][0].transcript;
+      if(ev.results[i].isFinal) final += t; else interim += t;
+    }
+    const display = final || interim;
+    if(display) showTranscript(`<span class="u">${escHtml(display)}</span>`);
+    if(silenceTimer) clearTimeout(silenceTimer);
+    if(final){
+      silenceTimer = setTimeout(()=>{
+        if(final.trim()) sendMessage(final.trim());
+        final = '';
+      }, 900);
+    }
+  };
+
+  rec.onerror = ev => {
+    if(ev.error==='no-speech') toastMsg('Nenhuma fala detectada');
+    else if(ev.error!=='aborted') toastMsg(`Erro: ${ev.error}`);
+    stopListening();
+  };
+
+  rec.onend = ()=>{
+    stopListening();
+    if(final.trim()){ sendMessage(final.trim()); final=''; }
+  };
+
+  S.recognition = rec;
+  rec.start();
+}
+
+function stopListening(){
+  micBtn.classList.remove('recording');
+  if(S.recognition){ try{S.recognition.abort();}catch{} S.recognition=null; }
+  if(S.phase==='listening') setPhase('idle');
+}
+
+/* ================================================================
+   TTS WEBSOCKET
+   ================================================================ */
+async function ensureTTS(){
+  if(S.ttsWs && S.ttsWs.readyState===WebSocket.OPEN) return S.ttsWs;
+
+  return new Promise((resolve,reject)=>{
+    const proto = location.protocol==='https:'?'wss:':'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/api/tts-stream`);
+
+    ws.onopen = ()=>{
+      ws.send(JSON.stringify({
+        type:'start',
+        config:{
+          model:S.model,
+          reference_id:S.voice||undefined,
+          latency:S.latency,
+          speed:S.speed,
+          format:'mp3',
+        }
+      }));
+    };
+
+    ws.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if(m.type==='ready'){
+        S.ttsWs = ws;
+        resolve(ws);
+      } else if(m.type==='audio'){
+        queueAudio(m.data);
+      } else if(m.type==='done'){
+        // segment done
+      } else if(m.type==='error'){
+        toastMsg(`TTS: ${m.message}`,4000);
+      } else if(m.type==='stream_closed'){
+        S.ttsWs = null;
+      }
+    };
+
+    ws.onerror = ()=>reject(new Error('WebSocket error'));
+    ws.onclose = ()=>{ S.ttsWs=null; };
+  });
+}
+
+/* ================================================================
+   AUDIO PLAYBACK (PCM → AudioBuffer → Web Audio API)
+   ================================================================ */
+let audioCtx = null;
+let nextPlayTime = 0;
+
+function getAC(){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function queueAudio(b64){
+  S.audioQueue.push(b64);
+  if(!S.playing) drainQueue();
+}
+
+async function drainQueue(){
+  if(S.audioQueue.length===0){
+    S.playing=false;
+    setPhase(S.history.length?'idle':'idle');
+    return;
+  }
+  S.playing=true;
+  setPhase('speaking');
+
+  const b64 = S.audioQueue.shift();
+  try{
+    const ac = getAC();
+    if(ac.state==='suspended') await ac.resume();
+
+    // Decode MP3 → PCM
+    const raw = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+    const buf = await ac.decodeAudioData(raw.buffer);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.connect(ac.destination);
+
+    const now = ac.currentTime;
+    const startAt = Math.max(nextPlayTime, now);
+    src.start(startAt);
+    nextPlayTime = startAt + buf.duration;
+
+    src.onended = ()=> drainQueue();
+  }catch(e){
+    console.warn('Audio decode/play error', e);
+    drainQueue();
+  }
+}
+
+function stopAudio(){
+  S.audioQueue=[];
+  S.playing=false;
+  nextPlayTime=0;
+  if(audioCtx){ audioCtx.close().catch(()=>{}); audioCtx=null; }
+  if(S.phase==='speaking') setPhase('idle');
+}
+
+/* ================================================================
+   TEXT CHUNKING → TTS
+   Break AI stream into natural sentence fragments for low-latency TTS.
+   ================================================================ */
+let ttsBuffer = '';
+const SENTENCE_RE = /[.!?,;:]\s/;
+
+function feedTTS(text){
+  ttsBuffer += text;
+  // Send sentence-level chunks for best quality + low latency
+  let idx;
+  while((idx = ttsBuffer.search(SENTENCE_RE)) !== -1){
+    const splitAt = idx + 1; // include punctuation
+    const chunk = ttsBuffer.slice(0, splitAt);
+    ttsBuffer = ttsBuffer.slice(splitAt);
+    sendTTSChunk(chunk);
+  }
+}
+
+function flushTTS(){
+  if(ttsBuffer.trim()){
+    sendTTSChunk(ttsBuffer);
+    ttsBuffer = '';
+  }
+  // Flush Fish Audio buffer
+  if(S.ttsWs?.readyState===WebSocket.OPEN){
+    S.ttsWs.send(JSON.stringify({type:'flush'}));
+  }
+}
+
+function sendTTSChunk(text){
+  if(S.ttsWs?.readyState===WebSocket.OPEN){
+    S.ttsWs.send(JSON.stringify({type:'text', text}));
+  }
+}
+
+/* ================================================================
+   SEND MESSAGE
+   ================================================================ */
+async function sendMessage(text){
+  if(!text.trim()) return;
+  S.history.push({role:'user', content:text});
+  showTranscript(`<span class="u">${escHtml(text)}</span>`);
+  input.value = '';
+
+  // Stop any ongoing audio
+  if(S.playing) stopAudio();
+  if(S.ttsWs?.readyState===WebSocket.OPEN){
+    S.ttsWs.send(JSON.stringify({type:'stop'}));
+  }
+  ttsBuffer='';
+
+  setPhase('thinking');
+
+  // Ensure TTS connection
+  try{ await ensureTTS(); }catch(e){
+    toastMsg('Erro ao conectar com Fish Audio',4000);
+    setPhase('error');
+    return;
+  }
+
+  try{
+    const resp = await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:S.history}),
+    });
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let aiText='', buf='';
+
+    while(true){
+      const {done,value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines = buf.split('\n');
+      buf = lines.pop()||'';
+
+      for(const line of lines){
+        if(!line.startsWith('data: ')) continue;
+        const d = line.slice(6);
+        if(d==='[DONE]') break;
+        try{
+          const j=JSON.parse(d);
+          const delta = j.choices?.[0]?.delta?.content;
+          if(delta){
+            aiText += delta;
+            showTranscript(`<span class="a">${escHtml(aiText)}</span>`);
+            feedTTS(delta);
+          }
+        }catch{}
+      }
+    }
+
+    // Flush remaining text
+    flushTTS();
+    S.history.push({role:'assistant', content:aiText});
+  }catch(e){
+    console.error('Chat error:',e);
+    toastMsg('Erro ao obter resposta',3000);
+    setPhase('error');
+  }
+}
+
+/* ================================================================
+   EVENT LISTENERS
+   ================================================================ */
+micBtn.onclick = ()=>{
+  if(S.phase==='listening') stopListening();
+  else startListening();
+};
+
+input.addEventListener('keydown', e=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    sendMessage(input.value);
+  }
+});
+
+closeBtn.onclick = ()=>{
+  stopListening();
+  stopAudio();
+  if(S.ttsWs){
+    try{S.ttsWs.send(JSON.stringify({type:'stop'}));}catch{}
+    S.ttsWs.close();
+    S.ttsWs=null;
+  }
+  ttsBuffer='';
+  S.history=[];
+  showTranscript('');
+  setPhase('idle');
+  toastMsg('Conversa reiniciada',2000);
+};
+
+menuBtn.onclick = ()=> toastMsg('🐟 Fish Studio Voice Chat v1.0',2500);
+
+/* ================================================================
+   HELPERS
+   ================================================================ */
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Init
+setPhase('idle');
+</script>
+</body>
+</html>
