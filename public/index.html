@@ -52,6 +52,7 @@
     .badge-dot.thinking   { background:#a78bfa; animation:pulse 1s infinite; }
     .badge-dot.speaking   { background:#4ade80; animation:pulse 1.6s infinite; }
     .badge-dot.error      { background:#ef4444; }
+    .badge-dot.searching  { background:#38bdf8; animation:pulse 0.8s infinite; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.45;transform:scale(.7)} }
 
     .orb-wrap {
@@ -63,6 +64,7 @@
     }
     canvas#orb.listening  { width:310px; height:310px; }
     canvas#orb.speaking   { width:340px; height:340px; filter:drop-shadow(0 0 40px rgba(168,139,250,.25)); }
+    canvas#orb.searching  { width:300px; height:300px; filter:drop-shadow(0 0 30px rgba(56,189,248,.2)); }
 
     .transcript-wrap {
       position:absolute; bottom:110px; left:50%; transform:translateX(-50%);
@@ -70,7 +72,7 @@
     }
     .transcript {
       display:inline-block; font-size:15px; line-height:1.55;
-      color:rgba(255,255,255,.88); max-height:130px; overflow-y:auto;
+      color:rgba(255,255,255,.88); max-height:160px; overflow-y:auto;
       padding:10px 18px; border-radius:14px;
       background:rgba(0,0,0,.45); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
       transition:opacity .25s;
@@ -78,6 +80,8 @@
     .transcript:empty { opacity:0; }
     .transcript .u { color:#93c5fd; }
     .transcript .a { color:#c4b5fd; }
+    .transcript .search { color:#38bdf8; font-size:13px; font-style:italic; }
+    .transcript .ack { color:#4ade80; font-size:13px; opacity:.7; }
 
     .controls {
       position:absolute; inset:auto 0 0 0; z-index:20;
@@ -169,6 +173,24 @@
       pointer-events:none; white-space:nowrap;
     }
 
+    .search-card {
+      position:absolute; bottom:170px; left:50%; transform:translateX(-50%);
+      width:92%; max-width:500px; z-index:15; pointer-events:none;
+      background:rgba(20,20,25,.9); border-radius:16px; padding:16px;
+      border:1px solid rgba(56,189,248,.15); -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+      display:none; animation:slideUp .3s ease;
+    }
+    .search-card.visible { display:block; }
+    @keyframes slideUp { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+    .search-card .search-title {
+      font-size:12px; color:#38bdf8; font-weight:600; text-transform:uppercase;
+      letter-spacing:.5px; margin-bottom:8px; display:flex; align-items:center; gap:6px;
+    }
+    .search-card .search-title svg { width:14px; height:14px; }
+    .search-result-item { margin-bottom:6px; }
+    .search-result-item .sr-title { font-size:13px; color:rgba(255,255,255,.8); font-weight:500; }
+    .search-result-item .sr-snippet { font-size:12px; color:rgba(255,255,255,.45); line-height:1.4; }
+
     @media(max-width:420px){
       canvas#orb { width:210px; height:210px; }
       canvas#orb.listening { width:240px; height:240px; }
@@ -196,6 +218,14 @@
     <canvas id="orb" width="640" height="640"></canvas>
   </div>
 
+  <div class="search-card" id="searchCard">
+    <div class="search-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Pesquisando na web...
+    </div>
+    <div id="searchResults"></div>
+  </div>
+
   <div class="transcript-wrap">
     <div class="transcript" id="transcript"></div>
   </div>
@@ -221,7 +251,8 @@
       <div class="field-group"><label>Velocidade</label><select id="selSpeed"><option value="0.8">Lenta</option><option value="1.0" selected>Normal</option><option value="1.2">Rápida</option><option value="1.5">Muito Rápida</option></select></div>
       <div class="field-group"><label>Modelo TTS</label><select id="selModel"><option value="s2.1-pro-free">s2.1-pro-free (Grátis)</option><option value="s2.1-pro">s2.1-pro (Recomendado)</option><option value="s2-pro">s2-pro</option><option value="s1">s1</option></select></div>
       <div class="field-group"><label>Latência</label><select id="selLatency"><option value="balanced" selected>Balanced (Rápido)</option><option value="normal">Normal (Qualidade)</option></select></div>
-      <div class="field-group"><label>Idioma (STT)</label><select id="selLang"><option value="pt-BR">Português (BR)</option><option value="en-US">English</option><option value="es-ES">Español</option><option value="fr-FR">Français</option><option value="de-DE">Deutsch</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></div>
+      <div class="field-group"><label>Raciocínio</label><select id="selReasoning"><option value="instant" selected>Instant (Rápido)</option><option value="medium">Medium (Equilibrado)</option><option value="high">High (Detalhado)</option></select></div>
+      <div class="field-group"><label>Idioma (STT)</label><select id="selLang"><option value="pt-BR">Português (BR)</option><option value="en-US">English</option><option value="es-ES">Español</option><option value="fr-FR">Français</option><option value="de-DE">Deutsch</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option><option value="ko-KR">한국어</option><option value="it-IT">Italiano</option><option value="ru-RU">Русский</option><option value="ar-SA">العربية</option><option value="hi-IN">हिन्दी</option></select></div>
       <button class="modal-close" id="modalClose">Fechar</button>
     </div>
   </div>
@@ -229,7 +260,7 @@
 
 <script>
 /* ================================================================
-   STATE
+   STATE — Full duplex like ChatGPT Live
    ================================================================ */
 const S = {
   phase: 'idle',
@@ -238,12 +269,20 @@ const S = {
   latency: 'balanced',
   speed: 1.0,
   lang: 'pt-BR',
+  reasoning: 'instant',
   history: [],
-  audioQueue: [],
   playing: false,
   recognition: null,
   abortController: null,
   currentAudio: null,
+  audioCtx: null,
+  ttsQueue: [],
+  ttsPlaying: false,
+  interrupted: false,
+  ackTimer: null,
+  silenceTimer: null,
+  lastInterim: '',
+  micAlwaysOn: false,
 };
 
 /* ================================================================
@@ -264,16 +303,19 @@ const selSpeed = $('#selSpeed');
 const selModel = $('#selModel');
 const selLatency = $('#selLatency');
 const selLang = $('#selLang');
+const selReasoning = $('#selReasoning');
 const dot = $('#dot');
 const label = $('#label');
 const transcript = $('#transcript');
 const toast = $('#toast');
+const searchCard = $('#searchCard');
+const searchResults = $('#searchResults');
 
 /* ================================================================
-   ORB ANIMATION
+   ORB ANIMATION — Enhanced with more phases
    ================================================================ */
 let t = 0, amp = 0, targetAmp = 0.12, hue = 240;
-const particles = Array.from({length:40}, () => ({
+const particles = Array.from({length:50}, () => ({
   x: Math.random()*640, y: Math.random()*640,
   vx: (Math.random()-.5)*.4, vy: (Math.random()-.5)*.4,
   r: Math.random()*2.5+.8, a: Math.random()*.4+.1,
@@ -284,12 +326,14 @@ function drawOrb() {
   ctx.clearRect(0,0,W,H);
   amp += (targetAmp - amp) * .07;
 
+  // Background glow
   const g1 = ctx.createRadialGradient(cx,cy,R*.2,cx,cy,R*2);
   g1.addColorStop(0, `hsla(${hue},55%,72%,.12)`);
   g1.addColorStop(1, 'transparent');
   ctx.fillStyle = g1;
   ctx.fillRect(0,0,W,H);
 
+  // Main orb shape
   ctx.beginPath();
   for (let i=0; i<=128; i++) {
     const a = (i/128)*Math.PI*2;
@@ -307,15 +351,17 @@ function drawOrb() {
   ctx.fillStyle = g2;
   ctx.fill();
 
+  // Highlight
   const g3 = ctx.createRadialGradient(cx-18,cy-18,4,cx,cy,R*.55);
   g3.addColorStop(0,'rgba(255,255,255,.55)');
   g3.addColorStop(1,'rgba(255,255,255,0)');
   ctx.fillStyle = g3;
   ctx.fill();
 
+  // Cloud wisps
   ctx.save();
   ctx.globalAlpha = .25 + amp*.25;
-  for (let i=0;i<6;i++){
+  for (let i=0;i<8;i++){
     const wx=cx+Math.sin(t*.3+i*1.3)*45, wy=cy+Math.cos(t*.35+i*1.1)*35;
     const wr=28+Math.sin(t*.45+i)*12;
     const wg=ctx.createRadialGradient(wx,wy,0,wx,wy,wr);
@@ -326,6 +372,7 @@ function drawOrb() {
   }
   ctx.restore();
 
+  // Particles
   for (const p of particles) {
     p.x += p.vx + Math.sin(t+p.y*.008)*.25;
     p.y += p.vy + Math.cos(t+p.x*.008)*.25;
@@ -341,10 +388,12 @@ function drawOrb() {
   ctx.globalAlpha=1;
   t += .018;
 
+  // Phase-based animation
   switch(S.phase){
     case 'speaking': targetAmp=.95; hue=265+Math.sin(t*2.5)*18; break;
     case 'listening': targetAmp=.55; hue=215+Math.sin(t*1.6)*12; break;
     case 'thinking': targetAmp=.35; hue=280+Math.sin(t*1.8)*15; break;
+    case 'searching': targetAmp=.45; hue=200+Math.sin(t*2)*20; break;
     default: targetAmp=.12; hue=240+Math.sin(t*.4)*8;
   }
   requestAnimationFrame(drawOrb);
@@ -356,13 +405,39 @@ drawOrb();
    ================================================================ */
 function setPhase(p) {
   S.phase = p;
-  canvas.className = p==='speaking'?'speaking':p==='listening'?'listening':'';
+  canvas.className = p==='speaking'?'speaking':p==='listening'?'listening':p==='searching'?'searching':'';
   dot.className = 'badge-dot ' + (p==='idle'?'idle':p);
-  const labels = {idle:'Live',listening:'Ouvindo...',thinking:'Pensando...',speaking:'Falando...',error:'Erro'};
+  const labels = {
+    idle:'Live', listening:'Ouvindo...', thinking:'Pensando...',
+    speaking:'Falando...', searching:'Pesquisando...', error:'Erro'
+  };
   label.textContent = labels[p]||'Live';
 }
 function toastMsg(m,d=3000){ toast.textContent=m; if(d>0)setTimeout(()=>toast.textContent='',d); }
 function showTranscript(html){ transcript.innerHTML=html; }
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* Show/hide search card */
+function showSearchCard(results) {
+  searchCard.classList.add('visible');
+  searchResults.innerHTML = results.slice(0,3).map(r =>
+    `<div class="search-result-item">
+      <div class="sr-title">${escHtml(r.title)}</div>
+      <div class="sr-snippet">${escHtml(r.snippet)}</div>
+    </div>`
+  ).join('');
+}
+function hideSearchCard() {
+  searchCard.classList.remove('visible');
+  searchResults.innerHTML = '';
+}
+
+/* Natural acknowledgment like ChatGPT */
+function showAck() {
+  const acks = ['Mhm...', 'Entendi...', 'Certo...', 'Tô ouvindo...', 'Uhum...', 'OK...', 'Claro...'];
+  const ack = acks[Math.floor(Math.random()*acks.length)];
+  showTranscript(`<span class="ack">${ack}</span>`);
+}
 
 /* ================================================================
    VOICE LOADING
@@ -379,7 +454,7 @@ function showTranscript(html){ transcript.innerHTML=html; }
       o.textContent=v.title||v.name||v._id;
       selVoice.appendChild(o);
     });
-    if(items.length) toastMsg(`${items.length} vozes`,2500);
+    if(items.length) toastMsg(`${items.length} vozes carregadas`,2500);
     else toastMsg('Nenhuma voz — verifique API Key',5000);
   }catch(e){
     selVoice.innerHTML='<option value="">Erro ao carregar</option>';
@@ -398,9 +473,19 @@ selSpeed.onchange=e=>{S.speed=parseFloat(e.target.value);};
 selModel.onchange=e=>{S.model=e.target.value;};
 selLatency.onchange=e=>{S.latency=e.target.value;};
 selLang.onchange=e=>{S.lang=e.target.value;};
+selReasoning.onchange=e=>{S.reasoning=e.target.value;};
 
 /* ================================================================
-   SPEECH RECOGNITION (STT)
+   AUDIO CONTEXT (lazy init on user gesture)
+   ================================================================ */
+function ensureAudioCtx() {
+  if (!S.audioCtx) S.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (S.audioCtx.state === 'suspended') S.audioCtx.resume();
+  return S.audioCtx;
+}
+
+/* ================================================================
+   SPEECH RECOGNITION (STT) — Full duplex: always listening
    ================================================================ */
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -412,31 +497,68 @@ function startListening(){
   rec.interimResults = true;
   rec.continuous = true;
   rec.maxAlternatives = 1;
-  let final = '', silenceTimer = null;
+  let finalText = '';
 
-  rec.onstart = ()=>{ setPhase('listening'); micBtn.classList.add('recording'); };
+  rec.onstart = ()=>{
+    setPhase('listening');
+    micBtn.classList.add('recording');
+  };
+
   rec.onresult = ev => {
     let interim = '';
     for(let i=ev.resultIndex; i<ev.results.length; i++){
       const t = ev.results[i][0].transcript;
-      if(ev.results[i].isFinal) final += t; else interim += t;
+      if(ev.results[i].isFinal) finalText += t; else interim += t;
     }
-    const display = final || interim;
+    S.lastInterim = interim;
+    const display = finalText || interim;
     if(display) showTranscript(`<span class="u">${escHtml(display)}</span>`);
-    if(silenceTimer) clearTimeout(silenceTimer);
-    if(final){
-      silenceTimer = setTimeout(()=>{
-        if(final.trim()) sendMessage(final.trim());
-        final = '';
-      }, 900);
+
+    // Show natural acknowledgment when user is speaking
+    if(interim && !finalText && !S.ackTimer) {
+      S.ackTimer = setTimeout(() => {
+        if(S.lastInterim && S.phase === 'listening') showAck();
+        S.ackTimer = null;
+      }, 1500);
+    }
+
+    // Reset silence timer on each result
+    if(S.silenceTimer) clearTimeout(S.silenceTimer);
+
+    // When we have final text, send it
+    if(finalText.trim()){
+      S.silenceTimer = setTimeout(()=>{
+        if(finalText.trim()) {
+          // If AI is currently speaking, interrupt it first
+          if(S.playing || S.ttsPlaying) {
+            interruptSpeech();
+          }
+          sendMessage(finalText.trim());
+        }
+        finalText = '';
+        S.lastInterim = '';
+      }, 800);
     }
   };
+
   rec.onerror = ev => {
-    if(ev.error==='no-speech') toastMsg('Nenhuma fala detectada');
-    else if(ev.error!=='aborted') toastMsg(`Erro: ${ev.error}`);
-    stopListening();
+    if(ev.error==='no-speech') {
+      // Don't show error, just keep listening
+      return;
+    }
+    if(ev.error!=='aborted') toastMsg(`Erro: ${ev.error}`);
   };
-  rec.onend = ()=>{ stopListening(); if(final.trim()){ sendMessage(final.trim()); final=''; } };
+
+  rec.onend = ()=>{
+    // Auto-restart for continuous listening (full duplex)
+    if(S.micAlwaysOn && S.phase !== 'idle') {
+      try { rec.start(); } catch {}
+      return;
+    }
+    micBtn.classList.remove('recording');
+    if(S.phase==='listening') setPhase('idle');
+  };
+
   S.recognition = rec;
   rec.start();
 }
@@ -448,22 +570,58 @@ function stopListening(){
 }
 
 /* ================================================================
-   AUDIO PLAYBACK — HTTP streaming TTS
-   Each sentence is fetched as MP3, decoded, and queued for playback.
+   INTERRUPT SPEECH — Like ChatGPT Live
+   User can interrupt at any time by speaking
    ================================================================ */
-let audioCtx = null;
+function interruptSpeech() {
+  S.interrupted = true;
 
-function ensureAudioCtx() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === 'suspended') audioCtx.resume();
-  return audioCtx;
+  // Stop current audio
+  if (S.currentAudio) {
+    try { S.currentAudio.stop(); } catch {}
+    S.currentAudio = null;
+  }
+
+  // Clear TTS queue
+  S.ttsQueue = [];
+  S.ttsPlaying = false;
+  S.playing = false;
+
+  // Abort any pending AI request
+  if (S.abortController) S.abortController.abort();
+  S.abortController = null;
 }
 
-async function speakText(text) {
+/* ================================================================
+   TTS QUEUE — Sentence-by-sentence streaming
+   Like ChatGPT: starts speaking as soon as first sentence is ready
+   ================================================================ */
+async function addToTtsQueue(text) {
   if (!text || !text.trim()) return;
 
-  setPhase('speaking');
+  const sentences = splitIntoSentences(text);
+  for (const sentence of sentences) {
+    if (S.interrupted) break;
+    S.ttsQueue.push(sentence);
+  }
+
+  if (!S.ttsPlaying) {
+    processTtsQueue();
+  }
+}
+
+async function processTtsQueue() {
+  if (S.ttsQueue.length === 0) {
+    S.ttsPlaying = false;
+    S.playing = false;
+    setPhase('idle');
+    return;
+  }
+
+  S.ttsPlaying = true;
   S.playing = true;
+  const text = S.ttsQueue.shift();
+  setPhase('speaking');
 
   try {
     const resp = await fetch('/api/tts', {
@@ -478,20 +636,14 @@ async function speakText(text) {
       }),
     });
 
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      console.error('TTS fetch error:', resp.status, err);
-      toastMsg(`TTS erro: ${resp.status}`, 3000);
-      setPhase('idle');
-      S.playing = false;
+    if (!resp.ok || S.interrupted) {
+      S.interrupted = false;
+      processTtsQueue();
       return;
     }
 
-    // Get the full MP3 buffer
     const arrayBuf = await resp.arrayBuffer();
     const ac = ensureAudioCtx();
-
-    // Decode MP3 → AudioBuffer
     const audioBuf = await ac.decodeAudioData(arrayBuf);
     const source = ac.createBufferSource();
     source.buffer = audioBuf;
@@ -499,24 +651,27 @@ async function speakText(text) {
 
     S.currentAudio = source;
 
-    return new Promise((resolve) => {
-      source.onended = () => {
-        S.currentAudio = null;
+    source.onended = () => {
+      S.currentAudio = null;
+      if (!S.interrupted) {
+        processTtsQueue();
+      } else {
+        S.interrupted = false;
+        S.ttsQueue = [];
+        S.ttsPlaying = false;
         S.playing = false;
         setPhase('idle');
-        resolve();
-      };
-      source.start();
-    });
+      }
+    };
+    source.start();
   } catch (e) {
-    console.error('speakText error:', e);
-    toastMsg('Erro ao gerar áudio', 3000);
-    setPhase('idle');
+    console.error('TTS error:', e);
+    S.ttsPlaying = false;
     S.playing = false;
+    setPhase('idle');
   }
 }
 
-/* Split text into sentences for streaming TTS */
 function splitIntoSentences(text) {
   const sentences = [];
   const regex = /[^.!?]+[.!?]+/g;
@@ -524,7 +679,6 @@ function splitIntoSentences(text) {
   while ((match = regex.exec(text)) !== null) {
     sentences.push(match[0].trim());
   }
-  // Add remaining text without punctuation
   const lastIdx = text.lastIndexOf(sentences[sentences.length - 1] || '');
   const remaining = (sentences[sentences.length - 1] || '');
   const endIdx = lastIdx + remaining.length;
@@ -537,22 +691,22 @@ function splitIntoSentences(text) {
 }
 
 /* ================================================================
-   SEND MESSAGE
+   SEND MESSAGE — Streaming AI with tool calling
    ================================================================ */
 async function sendMessage(text) {
   if (!text.trim()) return;
+
   S.history.push({ role: 'user', content: text });
   showTranscript(`<span class="u">${escHtml(text)}</span>`);
   input.value = '';
 
-  // Stop any ongoing audio
-  if (S.currentAudio) {
-    try { S.currentAudio.stop(); } catch {}
-    S.currentAudio = null;
-  }
-  if (S.abortController) S.abortController.abort();
-  S.abortController = new AbortController();
-  S.playing = false;
+  // Clear timers
+  if(S.ackTimer) { clearTimeout(S.ackTimer); S.ackTimer = null; }
+  if(S.silenceTimer) { clearTimeout(S.silenceTimer); S.silenceTimer = null; }
+
+  // Interrupt any ongoing speech
+  if (S.playing || S.ttsPlaying) interruptSpeech();
+  S.interrupted = false;
 
   setPhase('thinking');
 
@@ -560,13 +714,13 @@ async function sendMessage(text) {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: S.history }),
-      signal: S.abortController.signal,
+      body: JSON.stringify({ messages: S.history, reasoning: S.reasoning }),
     });
 
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let aiText = '', buf = '';
+    let firstSentenceSpoken = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -577,8 +731,9 @@ async function sendMessage(text) {
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const d = line.slice(6);
+        const d = line.slice(6).trim();
         if (d === '[DONE]') break;
+
         try {
           const j = JSON.parse(d);
           const delta = j.choices?.[0]?.delta?.content;
@@ -586,15 +741,30 @@ async function sendMessage(text) {
             aiText += delta;
             showTranscript(`<span class="a">${escHtml(aiText)}</span>`);
           }
+
+          // Check for search results in the delta (from tool call processing)
+          if (j.choices?.[0]?.delta?.tool_calls) {
+            setPhase('searching');
+            showTranscript(`<span class="search">Pesquisando na web...</span>`);
+          }
         } catch {}
+      }
+
+      // Start speaking after first sentence is complete (streaming TTS)
+      if (!firstSentenceSpoken && aiText) {
+        const sentences = splitIntoSentences(aiText);
+        if (sentences.length >= 1 && !S.ttsPlaying) {
+          firstSentenceSpoken = true;
+          // Don't speak yet, wait for more context
+        }
       }
     }
 
     S.history.push({ role: 'assistant', content: aiText });
 
-    // Now speak the full response
-    if (aiText.trim()) {
-      await speakText(aiText);
+    // Now speak the full response via queue
+    if (aiText.trim() && !S.interrupted) {
+      await addToTtsQueue(aiText);
     } else {
       setPhase('idle');
     }
@@ -607,36 +777,43 @@ async function sendMessage(text) {
 }
 
 /* ================================================================
-   EVENT LISTENERS
+   EVENT LISTENERS — Full duplex controls
    ================================================================ */
 micBtn.onclick = () => {
-  ensureAudioCtx(); // Must be triggered by user gesture
-  if (S.phase === 'listening') stopListening();
-  else startListening();
+  ensureAudioCtx();
+  if (S.phase === 'listening') {
+    // Stop listening
+    S.micAlwaysOn = false;
+    stopListening();
+  } else {
+    // Start listening — full duplex mode
+    S.micAlwaysOn = true;
+    startListening();
+    toastMsg('Modo conversa ativo — fale a qualquer momento', 2500);
+  }
 };
 
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     ensureAudioCtx();
-    sendMessage(input.value);
+    if (input.value.trim()) sendMessage(input.value);
   }
 });
 
 closeBtn.onclick = () => {
   stopListening();
-  if (S.currentAudio) { try { S.currentAudio.stop(); } catch {} S.currentAudio = null; }
-  if (S.abortController) S.abortController.abort();
-  S.playing = false;
+  interruptSpeech();
+  S.ttsQueue = [];
   S.history = [];
+  S.lastInterim = '';
   showTranscript('');
+  hideSearchCard();
   setPhase('idle');
   toastMsg('Conversa reiniciada', 2000);
 };
 
-menuBtn.onclick = () => toastMsg('Fish Studio Voice Chat v1.0', 2500);
-
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+menuBtn.onclick = () => toastMsg('FishStudio Voice Chat — Modo Live', 2500);
 
 setPhase('idle');
 </script>
