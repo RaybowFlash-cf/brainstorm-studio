@@ -1,0 +1,48 @@
+{
+  "name": "angelical-ai",
+  "version": "1.0.0",
+  "description": "Angelical AI — Free Unlimited ChatGPT Alternative with Voice",
+  "type": "agent",
+  "runtime": {
+    "type": "daytona",
+    "sandbox": {
+      "image": "daytonaio/workspace-next:latest",
+      "ports": [3000],
+      "env": {
+        "PORT": "3000",
+        "NODE_ENV": "development"
+      },
+      "resources": {
+        "cpu": 2,
+        "memory": 4096,
+        "disk": 10240
+      }
+    }
+  },
+  "tools": {
+    "terminal": {
+      "enabled": true,
+      "description": "Full terminal access for executing commands, managing files, and running the dev server"
+    },
+    "fileSystem": {
+      "enabled": true,
+      "description": "Read, write, and manage files in the project directory"
+    },
+    "browser": {
+      "enabled": true,
+      "description": "Web browser access for testing and fetching content"
+    },
+    "codeExecution": {
+      "enabled": true,
+      "description": "Execute JavaScript, TypeScript, Python, and other code"
+    }
+  },
+  "mcp": ".mcp/servers.json",
+  "instructions": {
+    "system": "You are Angelical AI, a helpful coding agent working in a Daytona sandbox. You have full terminal access, file system access, and browser capabilities. Use these tools to help users build, test, and deploy applications.",
+    "workspace": "/home/daytona/project",
+    "shell": "bash",
+    "node": "20",
+    "packageManager": "npm"
+  }
+}
