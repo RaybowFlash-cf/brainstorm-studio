@@ -23,22 +23,25 @@ app.get('/api/voices', async (req, res) => {
   }
 });
 
-// ── Proxy: Chat Completions (OpenAI streaming SSE) ─────────
+// ── Proxy: Chat Completions (OpenAI-compatible streaming SSE) ─────────
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages } = req.body;
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    const baseUrl = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
+    const model = process.env.AI_MODEL || 'gpt-4o-mini';
+
+    const resp = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.AI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model,
         messages: [
           {
             role: 'system',
-            content: `You are a natural, friendly voice assistant called FishVoice. 
+            content: `You are a natural, friendly voice assistant called FishVoice.
 Keep responses concise and conversational (1-3 sentences max unless asked for detail).
 Speak naturally — avoid bullet points, markdown, or lists when speaking.
 When expressing emotions, use natural spoken language.
@@ -52,16 +55,50 @@ Never say "as an AI" or similar phrases.`,
       }),
     });
 
+    if (!resp.ok) {
+      const errBody = await resp.text();
+      console.error('AI API error:', resp.status, errBody);
+      return res.status(resp.status).json({ error: `AI API error: ${resp.status}` });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
-    resp.body.pipe(res);
-    resp.body.on('error', () => res.end());
-    req.on('close', () => { resp.body.destroy(); res.end(); });
+    // Stream with proper error handling
+    let destroyed = false;
+    const reader = resp.body;
+
+    reader.on('data', (chunk) => {
+      if (!destroyed) {
+        try { res.write(chunk); } catch {}
+      }
+    });
+
+    reader.on('end', () => {
+      if (!destroyed) {
+        try { res.end(); } catch {}
+      }
+    });
+
+    reader.on('error', (err) => {
+      console.error('AI stream error:', err.message);
+      if (!destroyed) {
+        try { res.end(); } catch {}
+      }
+    });
+
+    req.on('close', () => {
+      destroyed = true;
+      reader.destroy();
+      try { res.end(); } catch {}
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Chat endpoint error:', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
@@ -185,8 +222,18 @@ function safeSend(ws, data) {
   }
 }
 
+// ── Global error handling ──
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err.message);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err?.message || err);
+});
+
 // ── Start ──
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Voice Chat server → http://localhost:${PORT}`);
+  console.log(`AI Model: ${process.env.AI_MODEL} @ ${process.env.AI_BASE_URL}`);
+  console.log(`Fish Audio: ${process.env.FISH_API_KEY ? 'Key configured' : 'NO KEY'}`);
 });
