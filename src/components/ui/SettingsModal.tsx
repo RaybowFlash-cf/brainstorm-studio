@@ -12,6 +12,9 @@ interface SettingsModalProps {
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { settings, updateSettings } = useAppStore();
+  const filteredVoices = useAppStore((s) => s.filteredVoices);
+  const allVoices = useAppStore((s) => s.allVoices);
+  const setFilteredVoices = useAppStore((s) => s.setFilteredVoices);
   const [activeTab, setActiveTab] = useState<'general' | 'voice' | 'ai' | 'about'>('general');
   const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
 
@@ -25,10 +28,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
-
-  const filteredVoices = useAppStore((s) => s.filteredVoices);
-  const allVoices = useAppStore((s) => s.allVoices);
-  const setFilteredVoices = useAppStore((s) => s.setFilteredVoices);
 
   const handleVoiceSearch = (q: string) => {
     setVoiceSearchQuery(q);
