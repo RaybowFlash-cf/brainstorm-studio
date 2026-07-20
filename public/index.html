@@ -381,19 +381,177 @@ function ensureAudioCtx(){if(!S.audioCtx)S.audioCtx=new(window.AudioContext||win
    SPEECH RECOGNITION (STT)
    ═══════════════════════════════════════════════════════════════ */
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-function startListening(){ensureAudioCtx();if(SpeechRecognition){startWebSpeechRecognition();return}toastMsg('Web Speech API indisponível',4000);showTranscript('<span class="err">Microfone não suportado. Use o campo de texto.</span>')}
-function startWebSpeechRecognition(){
-  if(S.recognition){try{S.recognition.abort()}catch{}S.recognition=null}
-  const rec=new SpeechRecognition();rec.lang=S.lang;rec.interimResults=true;rec.continuous=true;rec.maxAlternatives=1;
-  let finalText='',restartCount=0;const maxRestarts=100;
-  rec.onstart=()=>{restartCount=0;setPhase('listening');micBtn.classList.add('recording')};
-  rec.onresult=ev=>{let interim='';for(let i=ev.resultIndex;i<ev.results.length;i++){const t=ev.results[i][0].transcript;if(ev.results[i].isFinal)finalText+=t;else interim+=t}S.lastInterim=interim;const display=finalText||interim;if(display)showTranscript(`<span class="u">${escHtml(display)}</span>`);if(interim&&!finalText&&!S.ackTimer){S.ackTimer=setTimeout(()=>{if(S.lastInterim&&S.phase==='listening')showAck();S.ackTimer=null},1500)}if(S.silenceTimer)clearTimeout(S.silenceTimer);if(finalText.trim()){S.silenceTimer=setTimeout(()=>{if(finalText.trim()){if(S.playing||S.ttsPlaying)interruptSpeech();sendMessage(finalText.trim())}finalText='';S.lastInterim=''},800)}};
-  rec.onerror=ev=>{console.log('[STT] Error:',ev.error);if(ev.error==='no-speech')return;if(ev.error==='audio-capture'){toastMsg('Sem acesso ao microfone',4000);showTranscript('<span class="err">Sem acesso ao microfone.</span>');stopListening();return}if(ev.error==='not-allowed'){toastMsg('Permissão negada',4000);showTranscript('<span class="err">Permissão do microfone negada.</span>');stopListening();return}if(ev.error!=='aborted')toastMsg(`Erro: ${ev.error}`)};
-  rec.onend=()=>{if(S.micAlwaysOn&&restartCount<maxRestarts){restartCount++;try{setTimeout(()=>{if(S.micAlwaysOn)rec.start()},100)}catch(e){micBtn.classList.remove('recording');if(S.phase==='listening')setPhase('idle')}return}micBtn.classList.remove('recording');if(S.phase==='listening')setPhase('idle')};
-  S.recognition=rec;
-  navigator.mediaDevices?.getUserMedia({audio:true}).then(stream=>{S.mediaStream=stream;try{rec.start()}catch(e){toastMsg('Erro ao iniciar microfone',3000);stopListening()}}).catch(()=>{toastMsg('Permissão negada',4000);showTranscript('<span class="err">Permita o acesso ao microfone.</span>')});
+
+function checkMicSupport(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    return{ok:false,msg:'getUserMedia não suportado neste navegador'};
+  }
+  if(!SpeechRecognition){
+    return{ok:false,msg:'Web Speech API não suportada'};
+  }
+  if(location.protocol!=='https:'&&location.hostname!=='localhost'){
+    return{ok:false,msg:'Microfone requer HTTPS'};
+  }
+  return{ok:true};
 }
-function stopListening(){S.micAlwaysOn=false;micBtn.classList.remove('recording');if(S.recognition){try{S.recognition.abort()}catch{}S.recognition=null}if(S.mediaStream){S.mediaStream.getTracks().forEach(t=>t.stop());S.mediaStream=null}if(S.phase==='listening')setPhase('idle')}
+
+async function startListening(){
+  ensureAudioCtx();
+  const support=checkMicSupport();
+  if(!support.ok){
+    toastMsg(support.msg,5000);
+    showTranscript(`<span class="err">${support.msg}. Use o campo de texto.</span>`);
+    return;
+  }
+  try{
+    await startWebSpeechRecognition();
+  }catch(e){
+    console.error('[STT] Failed:',e);
+    toastMsg('Erro ao acessar microfone',4000);
+    showTranscript('<span class="err">Erro ao acessar microfone. Verifique as permissões.</span>');
+  }
+}
+
+async function startWebSpeechRecognition(){
+  if(S.recognition){
+    try{S.recognition.abort()}catch{}
+    S.recognition=null;
+  }
+
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:{
+        echoCancellation:true,
+        noiseSuppression:true,
+        autoGainControl:true,
+        channelCount:1,
+        sampleRate:16000
+      }
+    });
+  }catch(e){
+    console.error('[STT] getUserMedia failed:',e);
+    let msg='Permissão do microfone negada';
+    if(e.name==='NotAllowedError') msg='Permissão do microfone negada. Clique no ícone de cadeado na barra de endereço.';
+    else if(e.name==='NotFoundError') msg='Nenhum microfone encontrado';
+    else if(e.name==='NotReadableError') msg='Microfone em uso por outro aplicativo';
+    else msg=`Erro: ${e.message}`;
+    toastMsg(msg,5000);
+    showTranscript(`<span class="err">${msg}</span>`);
+    throw e;
+  }
+
+  S.mediaStream=stream;
+
+  const rec=new SpeechRecognition();
+  rec.lang=S.lang;
+  rec.interimResults=true;
+  rec.continuous=true;
+  rec.maxAlternatives=1;
+
+  let finalText='',restartCount=0;const maxRestarts=200;
+
+  rec.onstart=()=>{
+    restartCount=0;
+    setPhase('listening');
+    micBtn.classList.add('recording');
+    toastMsg('Ouvindo...',2000);
+  };
+
+  rec.onresult=ev=>{
+    let interim='';
+    for(let i=ev.resultIndex;i<ev.results.length;i++){
+      const t=ev.results[i][0].transcript;
+      if(ev.results[i].isFinal) finalText+=t;
+      else interim+=t;
+    }
+    S.lastInterim=interim;
+    const display=finalText||interim;
+    if(display) showTranscript(`<span class="u">${escHtml(display)}</span>`);
+    if(interim&&!finalText&&!S.ackTimer){
+      S.ackTimer=setTimeout(()=>{
+        if(S.lastInterim&&S.phase==='listening') showAck();
+        S.ackTimer=null;
+      },1500);
+    }
+    if(S.silenceTimer) clearTimeout(S.silenceTimer);
+    if(finalText.trim()){
+      S.silenceTimer=setTimeout(()=>{
+        if(finalText.trim()){
+          if(S.playing||S.ttsPlaying) interruptSpeech();
+          sendMessage(finalText.trim());
+        }
+        finalText='';
+        S.lastInterim='';
+      },800);
+    }
+  };
+
+  rec.onerror=ev=>{
+    console.log('[STT] Error:',ev.error);
+    if(ev.error==='no-speech') return;
+    if(ev.error==='audio-capture'){
+      toastMsg('Erro de captura de áudio',4000);
+      showTranscript('<span class="err">Erro de captura de áudio.</span>');
+      stopListening();
+      return;
+    }
+    if(ev.error==='not-allowed'){
+      toastMsg('Permissão negada',4000);
+      showTranscript('<span class="err">Permissão do microfone negada.</span>');
+      stopListening();
+      return;
+    }
+    if(ev.error!=='aborted') toastMsg(`Erro: ${ev.error}`);
+  };
+
+  rec.onend=()=>{
+    if(S.micAlwaysOn&&restartCount<maxRestarts){
+      restartCount++;
+      try{
+        setTimeout(()=>{
+          if(S.micAlwaysOn){
+            try{rec.start()}catch(e){
+              console.warn('[STT] Restart failed:',e);
+              micBtn.classList.remove('recording');
+              if(S.phase==='listening') setPhase('idle');
+            }
+          }
+        },100);
+      }catch(e){
+        micBtn.classList.remove('recording');
+        if(S.phase==='listening') setPhase('idle');
+      }
+      return;
+    }
+    micBtn.classList.remove('recording');
+    if(S.phase==='listening') setPhase('idle');
+  };
+
+  S.recognition=rec;
+  try{
+    rec.start();
+  }catch(e){
+    console.error('[STT] rec.start failed:',e);
+    toastMsg('Erro ao iniciar reconhecimento',3000);
+    stopListening();
+    throw e;
+  }
+}
+
+function stopListening(){
+  S.micAlwaysOn=false;
+  micBtn.classList.remove('recording');
+  if(S.recognition){
+    try{S.recognition.abort()}catch{}
+    S.recognition=null;
+  }
+  if(S.mediaStream){
+    S.mediaStream.getTracks().forEach(t=>t.stop());
+    S.mediaStream=null;
+  }
+  if(S.phase==='listening') setPhase('idle');
+}
 
 /* ═══════════════════════════════════════════════════════════════
    INTERRUPT
