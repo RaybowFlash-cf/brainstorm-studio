@@ -1,17 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
 const path = require('path');
 const fetch = require('node-fetch');
+const multer = require('multer');
 
 const app = express();
 const server = http.createServer(app);
 
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── System prompt ────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are FishVoice, a highly capable AI voice assistant similar to ChatGPT's Live Voice mode.
 
 CORE BEHAVIOR:
@@ -33,13 +34,6 @@ CAPABILITIES:
 TOOL USE:
 - When the user asks about current events, news, weather, stocks, sports scores, or any real-time information, use the web_search tool
 - When you need to verify facts or get up-to-date info, use web_search
-- You can call web_search with a search query and I will return results
-
-VISUAL RESPONSES:
-- For weather: mention the actual weather conditions
-- For calculations: show the result clearly
-- For code: describe what the code does naturally
-- For recipes: list ingredients conversationally
 
 CONVERSATION STYLE:
 - Be warm and personable
@@ -48,118 +42,152 @@ CONVERSATION STYLE:
 - If the user seems confused, simplify your explanation
 - If they seem excited, match their energy`;
 
-// ── Proxy: List Fish Audio voices ──────────────────────────
+// ── Helper: get Fish API key (from server env or user override)
+function getFishKey(userKey) {
+  return userKey || process.env.FISH_API_KEY;
+}
+
+// ── Proxy: List ALL Fish Audio voices (paginated) ────────────
 app.get('/api/voices', async (req, res) => {
   try {
-    const resp = await fetch('https://api.fish.audio/model?page_size=100', {
-      headers: { Authorization: `Bearer ${process.env.FISH_API_KEY}` },
-    });
-    res.json(await resp.json());
+    const fishKey = getFishKey(req.query.key);
+    let allVoices = [];
+    let cursor = null;
+    let pages = 0;
+
+    do {
+      const url = new URL('https://api.fish.audio/model');
+      url.searchParams.set('page_size', '100');
+      if (cursor) url.searchParams.set('cursor', cursor);
+
+      const resp = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${fishKey}` },
+      });
+      if (!resp.ok) break;
+      const data = await resp.json();
+      const items = data.items || data.data || [];
+      allVoices = allVoices.concat(items);
+      cursor = data.cursor || null;
+      pages++;
+    } while (cursor && pages < 20);
+
+    res.json({ items: allVoices, total: allVoices.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Web Search API (for AI tool calling) ─────────────────────
+// ── Proxy: Search voices by name ──────────────────────────────
+app.get('/api/voices/search', async (req, res) => {
+  try {
+    const fishKey = getFishKey(req.query.key);
+    const q = req.query.q || '';
+    const url = new URL('https://api.fish.audio/model');
+    url.searchParams.set('page_size', '100');
+    if (q) url.searchParams.set('title', q);
+
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${fishKey}` },
+    });
+    const data = await resp.json();
+    res.json({ items: data.items || data.data || [], total: (data.items || []).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Voice Clone: Create a new voice from uploaded audio ───────
+app.post('/api/voice-clone', upload.single('audio'), async (req, res) => {
+  try {
+    const fishKey = getFishKey(req.body.key);
+    const { title, description, text } = req.body;
+
+    if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+
+    const formData = new (require('form-data'))();
+    formData.append('audio', req.file.buffer, {
+      filename: req.file.originalname || 'clone.mp3',
+      contentType: req.file.mimetype || 'audio/mpeg',
+    });
+    if (title) formData.append('title', title);
+    if (description) formData.append('description', description);
+    if (text) formData.append('text', text);
+
+    const resp = await fetch('https://api.fish.audio/v1/voice/create', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${fishKey}`,
+        ...formData.getHeaders(),
+      },
+      body: formData,
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      return res.status(resp.status).json(data);
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('Voice clone error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Web Search API ─────────────────────────────────────────────
 app.post('/api/search', async (req, res) => {
   try {
     const { query } = req.body;
     if (!query) return res.status(400).json({ error: 'No query' });
-
     const results = [];
 
-    // 1. Try Wikipedia API (reliable, no captcha)
     try {
       const wikiResp = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`);
       if (wikiResp.ok) {
         const wiki = await wikiResp.json();
         if (wiki.extract) {
-          results.push({
-            title: wiki.title || query,
-            url: wiki.content_urls?.desktop?.page || '',
-            snippet: wiki.extract,
-          });
+          results.push({ title: wiki.title || query, url: wiki.content_urls?.desktop?.page || '', snippet: wiki.extract });
         }
       }
-    } catch (e) {
-      console.error('Wiki error:', e.message);
-    }
+    } catch (e) {}
 
-    // 2. Try Wikipedia search API for more results
     try {
       const searchResp = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=4`);
       if (searchResp.ok) {
         const searchData = await searchResp.json();
-        const searchResults = searchData.query?.search || [];
-        for (const r of searchResults) {
+        for (const r of (searchData.query?.search || [])) {
           if (r.title && r.snippet) {
-            results.push({
-              title: r.title,
-              url: `https://en.wikipedia.org/wiki/${encodeURIComponent(r.title)}`,
-              snippet: r.snippet.replace(/<[^>]*>/g, ''),
-            });
+            results.push({ title: r.title, url: `https://en.wikipedia.org/wiki/${encodeURIComponent(r.title)}`, snippet: r.snippet.replace(/<[^>]*>/g, '') });
           }
         }
       }
-    } catch (e) {
-      console.error('Wiki search error:', e.message);
-    }
+    } catch (e) {}
 
-    // 3. Try DuckDuckGo Instant Answer (for direct answers)
     try {
       const ddgResp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`);
       const ddg = await ddgResp.json();
-      if (ddg.AbstractText) {
-        results.unshift({
-          title: ddg.Heading || query,
-          url: ddg.AbstractURL || '',
-          snippet: ddg.AbstractText,
-        });
-      }
-      if (ddg.Answer) {
-        results.unshift({
-          title: 'Resposta',
-          url: '',
-          snippet: ddg.Answer,
-        });
-      }
-    } catch (e) {
-      console.error('DDG API error:', e.message);
-    }
+      if (ddg.AbstractText) results.unshift({ title: ddg.Heading || query, url: ddg.AbstractURL || '', snippet: ddg.AbstractText });
+      if (ddg.Answer) results.unshift({ title: 'Resposta', url: '', snippet: ddg.Answer });
+    } catch (e) {}
 
-    // Deduplicate by title
     const seen = new Set();
-    const unique = [];
-    for (const r of results) {
-      if (!seen.has(r.title)) {
-        seen.add(r.title);
-        unique.push(r);
-      }
-    }
-
+    const unique = results.filter(r => { if (seen.has(r.title)) return false; seen.add(r.title); return true; });
     res.json({ results: unique.slice(0, 6), query });
   } catch (err) {
-    console.error('Search error:', err.message);
     res.json({ results: [], query: req.body?.query || '', error: err.message });
   }
 });
 
-// ── Proxy: Chat Completions (OpenAI-compatible streaming SSE) ─────────
+// ── Chat Completions (streaming SSE) ──────────────────────────
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, reasoning } = req.body;
+    const { messages, reasoning, customPrompt } = req.body;
     const baseUrl = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
     const model = process.env.AI_MODEL || 'gpt-4o-mini';
 
-    // Adjust system prompt based on reasoning level
-    let systemContent = SYSTEM_PROMPT;
-    if (reasoning === 'high') {
-      systemContent += '\n\nTake your time to think through complex questions carefully. Provide thorough, well-reasoned answers.';
-    } else if (reasoning === 'medium') {
-      systemContent += '\n\nThink carefully about questions before answering. Provide balanced, thoughtful responses.';
-    } else {
-      systemContent += '\n\nRespond quickly and directly. Keep it concise.';
-    }
+    let systemContent = customPrompt || SYSTEM_PROMPT;
+    if (reasoning === 'high') systemContent += '\n\nTake your time to think through complex questions carefully. Provide thorough, well-reasoned answers.';
+    else if (reasoning === 'medium') systemContent += '\n\nThink carefully about questions before answering.';
+    else systemContent += '\n\nRespond quickly and directly. Keep it concise.';
 
     const resp = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -169,12 +197,9 @@ app.post('/api/chat', async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        messages: [
-          { role: 'system', content: systemContent },
-          ...messages,
-        ],
+        messages: [{ role: 'system', content: systemContent }, ...messages],
         stream: true,
-        max_tokens: 500,
+        max_tokens: 800,
       }),
     });
 
@@ -190,53 +215,27 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
 
     let destroyed = false;
-
-    const reader = resp.body;
-
-    // Simple proxy: forward all chunks directly from AI API to client
-    reader.on('data', (chunk) => {
-      if (!destroyed) {
-        try { res.write(chunk); } catch {}
-      }
-    });
-
-    reader.on('end', () => {
-      if (!destroyed) {
-        try { res.end(); } catch {}
-      }
-    });
-
-    reader.on('error', (err) => {
-      console.error('AI stream error:', err.message);
-      if (!destroyed) {
-        try { res.end(); } catch {}
-      }
-    });
-
-    req.on('close', () => {
-      destroyed = true;
-      reader.destroy();
-      try { res.end(); } catch {}
-    });
+    resp.body.on('data', (chunk) => { if (!destroyed) try { res.write(chunk); } catch {} });
+    resp.body.on('end', () => { if (!destroyed) try { res.end(); } catch {} });
+    resp.body.on('error', () => { if (!destroyed) try { res.end(); } catch {} });
+    req.on('close', () => { destroyed = true; resp.body.destroy(); try { res.end(); } catch {} });
   } catch (err) {
-    console.error('Chat endpoint error:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    }
+    console.error('Chat error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
-// ── HTTP TTS endpoint (streaming MP3) ──────────────────────
+// ── TTS endpoint (streaming MP3) ──────────────────────────────
 app.post('/api/tts', async (req, res) => {
   try {
-    const { text, model, reference_id, latency, speed } = req.body;
+    const { text, model, reference_id, latency, speed, fishKey } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'No text' });
 
     const ttsModel = model || 's2.1-pro-free';
     const resp = await fetch('https://api.fish.audio/v1/tts', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.FISH_API_KEY}`,
+        Authorization: `Bearer ${getFishKey(fishKey)}`,
         'Content-Type': 'application/json',
         model: ttsModel,
       },
@@ -246,11 +245,7 @@ app.post('/api/tts', async (req, res) => {
         latency: latency || 'balanced',
         format: 'mp3',
         sample_rate: 44100,
-        prosody: {
-          speed: speed || 1.0,
-          volume: 0,
-          normalize_loudness: true,
-        },
+        prosody: { speed: speed || 1.0, volume: 0, normalize_loudness: true },
         chunk_length: 200,
       }),
     });
@@ -267,12 +262,13 @@ app.post('/api/tts', async (req, res) => {
     resp.body.on('error', () => res.end());
     req.on('close', () => resp.body.destroy());
   } catch (err) {
-    console.error('TTS endpoint error:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    }
+    console.error('TTS error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
+
+// ── Health check ──────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
 // ── Global error handling ──
 process.on('uncaughtException', (err) => console.error('Uncaught:', err.message));
